@@ -8,24 +8,42 @@ import {
     Button,
     List,
     ListItem,
-    ListItemText,
     Divider,
 } from '@mui/material';
+import { marked } from 'marked';
 
 type Message = {
     role: 'user' | 'assistant';
     content: string;
+    htmlContent?: string; // Store pre-parsed HTML for rendering
 };
 
 const ChatApp: React.FC = () => {
-    const [messages, setMessages] = useState<Message[]>([]); // Stores all chat messages
-    const [input, setInput] = useState<string>(''); // Stores user input
-    const [isLoading, setIsLoading] = useState<boolean>(false); // Indicates streaming state
-    const chatBoxRef = useRef<HTMLDivElement>(null); // Ref for the chat box to auto-scroll
+    const [messages, setMessages] = useState<Message[]>([]);
+    const [input, setInput] = useState<string>('');
+    const [isLoading, setIsLoading] = useState<boolean>(false);
+    const chatBoxRef = useRef<HTMLDivElement>(null);
+    const [isThinkPassed, setIsThinkPassed] = useState<boolean>(true);
 
-    // Function to handle sending a message
+    // Function to process markdown before rendering
+    const processMarkdown = async (message: Message) => {
+        if (message.role === 'assistant') {
+            if(message.content.includes('<think>')) setIsThinkPassed(false);
+            if (message.content.includes('</think>')) {
+                setIsThinkPassed(true);
+            } else {
+                return message;
+            }
+            if (!isThinkPassed) return message;
+            message.htmlContent = await marked.parse(message.content.split('</think>')[1]);
+        } else {
+            message.htmlContent = message.content; // Users don't use markdown
+        }
+        return message;
+    };
+
     const sendMessage = async () => {
-        if (!input.trim()) return; // Skip if input is empty
+        if (!input.trim()) return;
 
         const userMessage: Message = { role: 'user', content: input.trim() };
         setMessages((prev) => [...prev, userMessage]);
@@ -60,12 +78,15 @@ const ChatApp: React.FC = () => {
                         botMessage.content += parsed.message.content;
                     }
 
+                    // Process markdown before updating state
+                    const processedMessage = await processMarkdown(botMessage);
+
                     setMessages((prev) => {
                         const newMessages = [...prev];
                         if (newMessages.length > 0 && newMessages[newMessages.length - 1].role === 'assistant') {
-                            newMessages[newMessages.length - 1] = botMessage;
+                            newMessages[newMessages.length - 1] = processedMessage;
                         } else {
-                            newMessages.push(botMessage);
+                            newMessages.push(processedMessage);
                         }
                         return newMessages;
                     });
@@ -73,13 +94,12 @@ const ChatApp: React.FC = () => {
             }
         } catch (error) {
             console.error('Error streaming response:', error);
-            setMessages((prev) => [...prev, { role: 'assistant', content: 'Error: Unable to fetch response.' }]);
+            setMessages((prev) => [...prev, { role: 'assistant', content: 'Error: Unable to fetch response.', htmlContent: 'Error: Unable to fetch response.' }]);
         } finally {
             setIsLoading(false);
         }
     };
 
-    // Auto-scroll to the bottom of the chat box
     useEffect(() => {
         if (chatBoxRef.current) {
             chatBoxRef.current.scrollTop = chatBoxRef.current.scrollHeight;
@@ -87,20 +107,21 @@ const ChatApp: React.FC = () => {
     }, [messages]);
 
     return (
-        <Box sx={{ display: 'flex', flexDirection: 'column', height: '80vh', p: 2 }}>
+        <Box sx={{ display: 'flex', flexDirection: 'column', height: '90vh', p: 2 }}>
             <Typography variant="h4" gutterBottom>
-                DeepSeek deepseek-r1:14b Chat
+                DeepSeek-r1:14b LOCAL Chat
             </Typography>
 
             <Card sx={{ flex: 1, overflowY: 'auto', mb: 2 }} ref={chatBoxRef}>
                 <CardContent>
                     <List>
                         {messages.map((msg, index) => {
-                            const [pre_think, resp] =
+                            const pre_think =
                                 msg.role !== 'user'
-                                    ? msg?.content?.replace(/\n\n/g, '').split('</think>')
-                                    : [undefined, msg.content];
+                                    ? msg?.content?.replace(/\n\n/g, '').split('</think>')[0]
+                                    : undefined;
                             const think = pre_think && pre_think.length ? pre_think.replace('<think>', '') : undefined;
+                            const resp = msg.role !== 'user' ? msg.htmlContent : msg.content;
 
                             return (
                                 <React.Fragment key={index}>
@@ -125,7 +146,13 @@ const ChatApp: React.FC = () => {
                                                 </Typography>
                                             )}
                                             <Divider sx={{ my: 0.5 }} />
-                                            <Typography>{resp}</Typography>
+                                            
+                                            {/* Render Markdown safely */}
+                                            <Typography
+                                                variant="body1"
+                                                component="div"
+                                                dangerouslySetInnerHTML={{ __html: resp as string }}
+                                            />
                                         </Box>
                                     </ListItem>
                                 </React.Fragment>
@@ -142,8 +169,19 @@ const ChatApp: React.FC = () => {
                     placeholder="Type your message..."
                     value={input}
                     onChange={(e) => setInput(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && sendMessage()}
+                    onKeyDown={(e) => {
+                        if (e.key === 'Enter' && e.shiftKey) {
+                            console.log('Shift + Enter');
+                            setInput(input + '\n');
+                            return;
+                        }
+                        if (e.key === 'Enter') {
+                            e.preventDefault();
+                            sendMessage();
+                        }
+                    }}
                     disabled={isLoading}
+                    multiline
                 />
                 <Button
                     variant="contained"
