@@ -11,11 +11,15 @@ import {
     Divider,
 } from '@mui/material';
 import { marked } from 'marked';
+import { franc } from 'franc-min';
+import { mapFrancToLocale } from './utils';
+
 
 type Message = {
     role: 'user' | 'assistant';
     content: string;
     htmlContent?: string; // Store pre-parsed HTML for rendering
+    language?: string;
 };
 
 const ChatApp: React.FC = () => {
@@ -24,6 +28,25 @@ const ChatApp: React.FC = () => {
     const [isLoading, setIsLoading] = useState<boolean>(false);
     const chatBoxRef = useRef<HTMLDivElement>(null);
     const [isThinkPassed, setIsThinkPassed] = useState<boolean>(true);
+
+    const detectLanguage = (text: string) => {
+        const langCode = franc(text);
+        const localeLang = mapFrancToLocale(langCode !== 'und' ? langCode : 'eng');
+        return localeLang;
+    };
+    
+    const speakResponse = (text: string) => {
+        window.speechSynthesis.cancel();
+        text = text.replace('<think>', '').replace('</think>', '');
+        const detectedLanguage = detectLanguage(text);
+        console.log("Detected language:", detectedLanguage);
+        if ('speechSynthesis' in window) {
+            const utterance = new SpeechSynthesisUtterance(text);
+            utterance.lang = detectedLanguage;
+            utterance.rate = detectedLanguage !=='it-IT' ? 1.5 : 1;
+            window.speechSynthesis.speak(utterance);
+        }
+    };
 
     // Function to process markdown before rendering
     const processMarkdown = async (message: Message) => {
@@ -44,8 +67,10 @@ const ChatApp: React.FC = () => {
 
     const sendMessage = async () => {
         if (!input.trim()) return;
+        const detectedLanguage = detectLanguage(input);
+        console.log("Detected language:", detectedLanguage);
 
-        const userMessage: Message = { role: 'user', content: input.trim() };
+        const userMessage: Message = { role: 'user', content: input.trim(), language: detectedLanguage };
         setMessages((prev) => [...prev, userMessage]);
         setInput('');
         setIsLoading(true);
@@ -69,7 +94,12 @@ const ChatApp: React.FC = () => {
             if (reader) {
                 while (true) {
                     const { value, done } = await reader.read();
-                    if (done) break;
+                    if (done) {
+                        const cleanedText = botMessage.content.split('</think>')[1]
+                            .replace(/(#{3,}|#{2} |\*{3,}|^### |^- |^> |\d+\.\s+|\[\w+\]\(\)|\*\*|_+|`|#{1,})/g, '');
+                        speakResponse(cleanedText);
+                        break;
+                    }
 
                     const chunk = decoder.decode(value, { stream: true });
                     const parsed = JSON.parse(chunk);
@@ -91,10 +121,9 @@ const ChatApp: React.FC = () => {
                         return newMessages;
                     });
                 }
-            }
+            } 
         } catch (error) {
-            console.error('Error streaming response:', error);
-            setMessages((prev) => [...prev, { role: 'assistant', content: 'Error: Unable to fetch response.', htmlContent: 'Error: Unable to fetch response.' }]);
+            setMessages((prev) => [...prev, { role: 'assistant', content: 'Error: Unable to fetch response.', htmlContent: 'Error: Unable to fetch response.', error }]);
         } finally {
             setIsLoading(false);
         }
